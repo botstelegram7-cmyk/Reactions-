@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.env
+bot_data.json
+*.log
+instance/
+.vscode/
+.idea/
+.DS_Store

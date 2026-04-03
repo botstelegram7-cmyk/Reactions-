@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 🤖 ANIMATED REACTION BOT – MULTI‑TOKEN + BIG REACTIONS
-- Inline keyboard (Update Channel, Support Group, Developer, Help)
+- Inline keyboard (Update Channel, Developer, Help, Error Report)
 - Multiple animated reactions (is_big=True) using multiple bot tokens
-- /bots command to list all bot usernames for easy admin addition
-- Force subscription support (optional)
+- /bots command to list all bot usernames
+- Force subscription (hardcoded via config)
+- All buttons work via callbacks
 """
 
 import os
@@ -16,24 +17,23 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
 
+# Import config
+import config
+
 print("=" * 60)
 print("🤖 ANIMATED REACTION BOT (MULTI‑TOKEN)")
 print("=" * 60)
 
-# ==================== CONFIGURATION ====================
-BOT_TOKENS_STR = os.getenv("BOT_TOKENS", "")
-if not BOT_TOKENS_STR:
-    print("❌ ERROR: BOT_TOKENS environment variable not set!")
+# ==================== LOAD CONFIG ====================
+BOT_TOKENS = config.BOT_TOKENS
+if not BOT_TOKENS:
+    print("❌ ERROR: No BOT_TOKENS found in environment!")
     print("Example: BOT_TOKENS=token1,token2,token3")
     sys.exit(1)
 
-BOT_TOKENS = [t.strip() for t in BOT_TOKENS_STR.split(",") if t.strip()]
-if len(BOT_TOKENS) < 2:
-    print("⚠️ WARNING: Add at least 2 bot tokens for multiple reactions")
-
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-PORT = int(os.getenv("PORT", "10000"))
-FORCE_SUB_CHANNEL = os.getenv("FORCE_SUB_CHANNEL", "")  # e.g., "@serenaunzipbot"
+OWNER_ID = config.OWNER_ID
+PORT = config.PORT
+FORCE_SUB_CHANNEL = config.FORCE_SUB_CHANNEL
 
 print(f"✅ Total Bot Tokens: {len(BOT_TOKENS)}")
 print(f"👑 Owner ID: {OWNER_ID}")
@@ -115,7 +115,7 @@ def get_all_bot_usernames():
 
 # ==================== ANIMATED REACTIONS (BIG) ====================
 def send_multiple_reactions(chat_id: int, message_id: int, msg_type: str = "text"):
-    """Send 3-8 reactions, first 3 are big/animated"""
+    """Send reactions, first N are big/animated"""
     if db.is_locked():
         return
     
@@ -123,8 +123,8 @@ def send_multiple_reactions(chat_id: int, message_id: int, msg_type: str = "text
     if not available:
         return
     
-    # Number of reactions = number of tokens (max 8)
-    num = min(len(available), 8)
+    # Number of reactions = min(number of tokens, MAX_REACTIONS)
+    num = min(len(available), config.MAX_REACTIONS)
     if num < 1:
         return
     
@@ -146,7 +146,7 @@ def send_multiple_reactions(chat_id: int, message_id: int, msg_type: str = "text
     for i in range(num):
         token = available[i % len(available)]
         emoji = selected[i]
-        is_big = (i < 3)   # first 3 reactions are BIG (animated)
+        is_big = (i < config.BIG_REACTIONS_COUNT)   # first N are BIG
         
         t = threading.Thread(
             target=lambda tkn=token, e=emoji, big=is_big: (
@@ -162,24 +162,20 @@ def send_multiple_reactions(chat_id: int, message_id: int, msg_type: str = "text
         t.join(timeout=3)
         success += 1
     
-    print(f"✅ {success} reactions sent (first 3 BIG/animated)")
+    print(f"✅ {success} reactions sent (first {config.BIG_REACTIONS_COUNT} BIG/animated)")
 
 # ==================== INLINE KEYBOARDS ====================
 def get_main_keyboard(is_owner=False):
-    """Main menu keyboard (Update Channel, Support Group, Developer, Help)"""
+    """Main menu keyboard (Update Channel, Developer, Help, Error Report)"""
     keyboard = [
-        [{"text": "📢 Update Channel", "url": "https://t.me/yourchannel"}],
-        [{"text": "👥 Support Group", "url": "https://t.me/yoursupport"}],
-        [{"text": "👨‍💻 Developer", "callback_data": "developer"},
-         {"text": "❓ Help", "callback_data": "help"}]
+        [{"text": "📢 Update Channel", "url": config.UPDATE_CHANNEL_URL}],
+        [{"text": "👨‍💻 Developer", "url": f"https://t.me/{config.DEVELOPER_USERNAME}"},
+         {"text": "❓ Help", "callback_data": "help"}],
+        [{"text": "⚠️ Report Error", "url": config.ERROR_REPORT_BOT}]
     ]
-    if is_owner:
-        keyboard.append([
-            {"text": "🔒 Lock", "callback_data": "lock"},
-            {"text": "🔓 Unlock", "callback_data": "unlock"},
-            {"text": "📊 Stats", "callback_data": "stats"},
-            {"text": "🤖 Bots", "callback_data": "bots"}
-        ])
+    # Owner-only admin buttons (lock/unlock/stats/bots) – removed from start menu,
+    # but available as commands or via separate admin panel? User said remove lock/unlock from start.
+    # We'll keep them as commands only.
     return {"inline_keyboard": keyboard}
 
 def get_force_sub_keyboard():
@@ -215,18 +211,18 @@ def handle_command(command: str, chat_id: int, user_id: int, username: str = "")
                 subscribed = False
             
             if not subscribed:
-                text = f"🔒 **Channel Membership Required**\n\nTo use this bot, please join our channel first:\n{FORCE_SUB_CHANNEL}\n\nAfter joining, click '✅ I've Joined'."
+                text = f"🔒 <b>Channel Membership Required</b>\n\nTo use this bot, please join our channel first:\n{FORCE_SUB_CHANNEL}\n\nAfter joining, click '✅ I've Joined'."
                 send_message(chat_id, text, get_force_sub_keyboard())
                 return
         
-        # Welcome message (pure reaction bot)
+        # Welcome message
         text = f"""🌸 <b>Welcome {username or 'User'}!</b>
 
 ✨ I add <b>multiple animated reactions</b> to your messages using several bot tokens.
 
 <b>How it works:</b>
 • Each bot token adds one reaction
-• First 3 reactions are <b>BIG & ANIMATED</b> (long‑press effect)
+• First {config.BIG_REACTIONS_COUNT} reactions are <b>BIG & ANIMATED</b> (long‑press effect)
 • Works in channels, groups, and private chats
 
 <b>Stats:</b>
@@ -248,7 +244,6 @@ def handle_command(command: str, chat_id: int, user_id: int, username: str = "")
         send_message(chat_id, text)
     
     elif command == '/bots' and user_id == OWNER_ID:
-        # Fetch all bot usernames
         usernames = get_all_bot_usernames()
         text = "🤖 <b>All Bot Usernames</b>\n\nAdd these bots as admins in your channel/group and enable <b>Add Reactions</b> permission:\n\n"
         for idx, uname in enumerate(usernames, 1):
@@ -277,10 +272,7 @@ def handle_command(command: str, chat_id: int, user_id: int, username: str = "")
 # ==================== CALLBACK QUERY HANDLER ====================
 def handle_callback(callback_data: str, chat_id: int, message_id: int, user_id: int):
     """Handle inline button presses"""
-    if callback_data == "developer":
-        text = "👨‍💻 <b>Developer</b>\n\n@technicalSerena"
-        send_message(chat_id, text)
-    elif callback_data == "help":
+    if callback_data == "help":
         text = "❓ <b>Help Center</b>\n\n• Use /start to begin\n• Add me to your channel/group\n• I will add multiple animated reactions automatically\n• Use /bots (owner) to see all bot usernames"
         send_message(chat_id, text)
     elif callback_data == "stats" and user_id == OWNER_ID:

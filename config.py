@@ -29,4 +29,4 @@ DEVELOPER_USERNAME = "technicalSerena"
 START_PIC_URL = ""   # leave empty if you don't want an image
 
 # Welcome animation GIF (fire effect)
-WELCOME_GIF_URL = "https://media.giphy.com/media/3o7abB06u9bNzA8LC8/giphy.gif"
+WELCOME_GIF_URL = "https://media4.giphy.com/media/v1.Y2lkPTZjMDliOTUyeTgzeXBsNXdmbGo2YmRkd3dtcDY3aWtuNWU1azYyNGt0c2JzZ21rdSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/Ed7grcEsfruMYR8QRh/giphy.gif"

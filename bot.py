@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
 🤖 ANIMATED REACTION BOT – MULTI‑TOKEN + BIG REACTIONS
-- Inline keyboard (Update Channel, Developer, Help, Error Report)
-- Multiple animated reactions (is_big=True) using multiple bot tokens
-- /bots command to list all bot usernames
-- Force subscription (hardcoded via config)
-- All buttons work via callbacks
+- Uses ALL bot tokens for reactions
+- Start picture + animated GIF on /start
+- Help button works
 """
 
 import os
@@ -17,25 +15,29 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
 
-# Import config
 import config
 
 print("=" * 60)
-print("🤖 ANIMATED REACTION BOT (MULTI‑TOKEN)")
+print("🤖 ANIMATED REACTION BOT (ALL TOKENS USED)")
 print("=" * 60)
 
 # ==================== LOAD CONFIG ====================
 BOT_TOKENS = config.BOT_TOKENS
 if not BOT_TOKENS:
-    print("❌ ERROR: No BOT_TOKENS found in environment!")
-    print("Example: BOT_TOKENS=token1,token2,token3")
+    print("❌ ERROR: No BOT_TOKENS found!")
     sys.exit(1)
 
 OWNER_ID = config.OWNER_ID
 PORT = config.PORT
 FORCE_SUB_CHANNEL = config.FORCE_SUB_CHANNEL
+MAX_REACTIONS = config.MAX_REACTIONS
+BIG_REACTIONS_COUNT = config.BIG_REACTIONS_COUNT
+START_PIC_URL = config.START_PIC_URL
+WELCOME_GIF_URL = config.WELCOME_GIF_URL
 
 print(f"✅ Total Bot Tokens: {len(BOT_TOKENS)}")
+print(f"🎯 Max reactions per message: {MAX_REACTIONS}")
+print(f"🔥 First {BIG_REACTIONS_COUNT} reactions will be BIG/animated")
 print(f"👑 Owner ID: {OWNER_ID}")
 print(f"📢 Force Sub: {FORCE_SUB_CHANNEL or 'Disabled'}")
 print(f"🌐 Health Port: {PORT}")
@@ -66,7 +68,6 @@ db = SimpleDB()
 
 # ==================== TELEGRAM API HELPERS ====================
 def api_request(bot_token: str, method: str, data: dict = None):
-    """Direct Telegram API call"""
     try:
         url = f"https://api.telegram.org/bot{bot_token}/{method}"
         resp = requests.post(url, json=data, timeout=10)
@@ -75,8 +76,7 @@ def api_request(bot_token: str, method: str, data: dict = None):
         print(f"❌ API Error ({method}): {e}")
         return {"ok": False}
 
-def send_message(chat_id: int, text: str, reply_markup=None):
-    """Send message using main bot token"""
+def send_message(chat_id: int, text: str, reply_markup=None, photo_url=None, animation_url=None):
     data = {
         "chat_id": chat_id,
         "text": text,
@@ -84,10 +84,23 @@ def send_message(chat_id: int, text: str, reply_markup=None):
     }
     if reply_markup:
         data["reply_markup"] = reply_markup
-    return api_request(BOT_TOKENS[0], "sendMessage", data)
+
+    if photo_url:
+        # send photo instead of plain text
+        photo_data = {"chat_id": chat_id, "photo": photo_url, "caption": text, "parse_mode": "HTML"}
+        if reply_markup:
+            photo_data["reply_markup"] = reply_markup
+        return api_request(BOT_TOKENS[0], "sendPhoto", photo_data)
+    elif animation_url:
+        # send GIF animation
+        gif_data = {"chat_id": chat_id, "animation": animation_url, "caption": text, "parse_mode": "HTML"}
+        if reply_markup:
+            gif_data["reply_markup"] = reply_markup
+        return api_request(BOT_TOKENS[0], "sendAnimation", gif_data)
+    else:
+        return api_request(BOT_TOKENS[0], "sendMessage", data)
 
 def send_reaction(token: str, chat_id: int, message_id: int, emoji: str, is_big: bool = True):
-    """Send reaction with is_big=True for animated effect"""
     data = {
         "chat_id": chat_id,
         "message_id": message_id,
@@ -96,14 +109,11 @@ def send_reaction(token: str, chat_id: int, message_id: int, emoji: str, is_big:
     }
     result = api_request(token, "setMessageReaction", data)
     if not result.get("ok") and is_big:
-        # Fallback: try without is_big
         data["is_big"] = False
         result = api_request(token, "setMessageReaction", data)
     return result.get("ok", False)
 
-# ==================== GET ALL BOT USERNAMES ====================
 def get_all_bot_usernames():
-    """Fetch usernames for all bot tokens"""
     usernames = []
     for token in BOT_TOKENS:
         info = api_request(token, "getMe")
@@ -113,9 +123,8 @@ def get_all_bot_usernames():
             usernames.append("Unknown")
     return usernames
 
-# ==================== ANIMATED REACTIONS (BIG) ====================
+# ==================== REACTIONS (USE ALL TOKENS) ====================
 def send_multiple_reactions(chat_id: int, message_id: int, msg_type: str = "text"):
-    """Send reactions, first N are big/animated"""
     if db.is_locked():
         return
     
@@ -123,12 +132,11 @@ def send_multiple_reactions(chat_id: int, message_id: int, msg_type: str = "text
     if not available:
         return
     
-    # Number of reactions = min(number of tokens, MAX_REACTIONS)
-    num = min(len(available), config.MAX_REACTIONS)
+    # Use ALL available tokens (no limit except what Telegram can handle)
+    num = min(len(available), MAX_REACTIONS)  # MAX_REACTIONS = len(BOT_TOKENS) now
     if num < 1:
         return
     
-    # Emoji pool based on message type
     emoji_pool = {
         "text":   ["❤️","🔥","👍","👏","🎉","🤔","😮","🤝","💯","⚡","🥰","😍","🤩","✨","🌟"],
         "photo":  ["❤️","🔥","👍","👏","😍","🤩","✨","🌟","🎯","🏆","💖","🎨","📸","🌅","🖼️"],
@@ -139,14 +147,14 @@ def send_multiple_reactions(chat_id: int, message_id: int, msg_type: str = "text
     emojis = emoji_pool.get(msg_type, emoji_pool["text"])
     selected = random.sample(emojis, min(num, len(emojis)))
     
-    print(f"🎯 Adding {num} reactions to message {message_id} (type: {msg_type})")
+    print(f"🎯 Adding {num} reactions to message {message_id} (using all {len(available)} tokens)")
     
     success = 0
     threads = []
     for i in range(num):
         token = available[i % len(available)]
         emoji = selected[i]
-        is_big = (i < config.BIG_REACTIONS_COUNT)   # first N are BIG
+        is_big = (i < BIG_REACTIONS_COUNT)
         
         t = threading.Thread(
             target=lambda tkn=token, e=emoji, big=is_big: (
@@ -156,30 +164,26 @@ def send_multiple_reactions(chat_id: int, message_id: int, msg_type: str = "text
         )
         threads.append(t)
         t.start()
-        time.sleep(random.uniform(0.3, 1.0))  # natural delay
+        time.sleep(random.uniform(0.3, 1.0))  # small delay between reactions
     
     for t in threads:
-        t.join(timeout=3)
+        t.join(timeout=5)
         success += 1
     
-    print(f"✅ {success} reactions sent (first {config.BIG_REACTIONS_COUNT} BIG/animated)")
+    print(f"✅ {success}/{num} reactions sent (first {BIG_REACTIONS_COUNT} BIG)")
 
 # ==================== INLINE KEYBOARDS ====================
-def get_main_keyboard(is_owner=False):
-    """Main menu keyboard (Update Channel, Developer, Help, Error Report)"""
+def get_main_keyboard():
+    """Main menu: Update Channel, Developer, Help, Report Error"""
     keyboard = [
         [{"text": "📢 Update Channel", "url": config.UPDATE_CHANNEL_URL}],
         [{"text": "👨‍💻 Developer", "url": f"https://t.me/{config.DEVELOPER_USERNAME}"},
          {"text": "❓ Help", "callback_data": "help"}],
         [{"text": "⚠️ Report Error", "url": config.ERROR_REPORT_BOT}]
     ]
-    # Owner-only admin buttons (lock/unlock/stats/bots) – removed from start menu,
-    # but available as commands or via separate admin panel? User said remove lock/unlock from start.
-    # We'll keep them as commands only.
     return {"inline_keyboard": keyboard}
 
 def get_force_sub_keyboard():
-    """Force subscription keyboard"""
     if not FORCE_SUB_CHANNEL:
         return None
     channel = FORCE_SUB_CHANNEL.lstrip('@')
@@ -192,7 +196,6 @@ def get_force_sub_keyboard():
 
 # ==================== COMMAND HANDLERS ====================
 def handle_command(command: str, chat_id: int, user_id: int, username: str = ""):
-    """Process bot commands"""
     if command == '/start':
         db.add_user(user_id)
         is_owner = (user_id == OWNER_ID)
@@ -203,10 +206,7 @@ def handle_command(command: str, chat_id: int, user_id: int, username: str = "")
                 url = f"https://api.telegram.org/bot{BOT_TOKENS[0]}/getChatMember"
                 data = {"chat_id": FORCE_SUB_CHANNEL, "user_id": user_id}
                 resp = requests.post(url, json=data).json()
-                if resp.get("ok") and resp["result"]["status"] in ["member","administrator","creator"]:
-                    subscribed = True
-                else:
-                    subscribed = False
+                subscribed = resp.get("ok") and resp["result"]["status"] in ["member","administrator","creator"]
             except:
                 subscribed = False
             
@@ -215,24 +215,29 @@ def handle_command(command: str, chat_id: int, user_id: int, username: str = "")
                 send_message(chat_id, text, get_force_sub_keyboard())
                 return
         
-        # Welcome message
-        text = f"""🌸 <b>Welcome {username or 'User'}!</b>
+        # Welcome message (without "How it works")
+        welcome_text = f"""🌸 <b>Welcome {username or 'User'}!</b>
 
-✨ I add <b>multiple animated reactions</b> to your messages using several bot tokens.
-
-<b>How it works:</b>
-• Each bot token adds one reaction
-• First {config.BIG_REACTIONS_COUNT} reactions are <b>BIG & ANIMATED</b> (long‑press effect)
-• Works in channels, groups, and private chats
+✨ I add <b>multiple animated reactions</b> to your messages using all my bot tokens.
 
 <b>Stats:</b>
 • Active Bots: {len(BOT_TOKENS)}
 • Reactions sent: {db.reaction_count:,}
 • Users: {db.get_user_count():,}
 
-<b>Owner:</b> @technicalSerena"""
+<b>Owner:</b> @technicalSerena
+
+👉 Click <b>Help</b> below to see how to use me."""
         
-        send_message(chat_id, text, get_main_keyboard(is_owner))
+        # Send with GIF animation (fire) + optional start picture
+        if START_PIC_URL:
+            # send photo with caption
+            send_message(chat_id, welcome_text, get_main_keyboard(), photo_url=START_PIC_URL)
+        elif WELCOME_GIF_URL:
+            # send animated GIF
+            send_message(chat_id, welcome_text, get_main_keyboard(), animation_url=WELCOME_GIF_URL)
+        else:
+            send_message(chat_id, welcome_text, get_main_keyboard())
     
     elif command == '/stats' and user_id == OWNER_ID:
         text = f"""📊 <b>Bot Statistics</b>
@@ -271,23 +276,47 @@ def handle_command(command: str, chat_id: int, user_id: int, username: str = "")
 
 # ==================== CALLBACK QUERY HANDLER ====================
 def handle_callback(callback_data: str, chat_id: int, message_id: int, user_id: int):
-    """Handle inline button presses"""
     if callback_data == "help":
-        text = "❓ <b>Help Center</b>\n\n• Use /start to begin\n• Add me to your channel/group\n• I will add multiple animated reactions automatically\n• Use /bots (owner) to see all bot usernames"
-        send_message(chat_id, text)
+        # Full help text (includes "How it works")
+        help_text = """❓ <b>Help Center</b>
+
+<b>How it works:</b>
+• Each bot token adds one reaction
+• First 3 reactions are <b>BIG & ANIMATED</b> (long‑press effect)
+• Works in channels, groups, and private chats
+
+<b>Setup for channels/groups:</b>
+1. Add all bot tokens as admins
+2. Enable <b>Add Reactions</b> permission
+3. Post any message – I will react automatically
+
+<b>Commands:</b>
+/start – Show this menu
+/stats – Bot statistics (owner)
+/lock – Disable reactions (owner)
+/unlock – Enable reactions (owner)
+/bots – List all bot usernames (owner)
+
+<b>Owner:</b> @technicalSerena"""
+        send_message(chat_id, help_text)
+    
     elif callback_data == "stats" and user_id == OWNER_ID:
         text = f"📊 <b>Stats</b>\nUsers: {db.get_user_count()}\nReactions: {db.reaction_count}"
         send_message(chat_id, text)
+    
     elif callback_data == "bots" and user_id == OWNER_ID:
         usernames = get_all_bot_usernames()
         text = "🤖 <b>Bot Usernames</b>\n\n" + "\n".join(usernames)
         send_message(chat_id, text)
+    
     elif callback_data == "lock" and user_id == OWNER_ID:
         db.set_lock(True)
         send_message(chat_id, "🔒 Locked")
+    
     elif callback_data == "unlock" and user_id == OWNER_ID:
         db.set_lock(False)
         send_message(chat_id, "🔓 Unlocked")
+    
     elif callback_data == "check_sub":
         if FORCE_SUB_CHANNEL:
             try:
@@ -303,9 +332,8 @@ def handle_callback(callback_data: str, chat_id: int, message_id: int, user_id: 
     else:
         send_message(chat_id, "⚠️ Unknown action")
 
-# ==================== LONG POLLING (MAIN BOT ONLY) ====================
+# ==================== LONG POLLING ====================
 def start_polling():
-    """Main bot fetches updates, others only send reactions"""
     print("🔄 Starting long polling...")
     offset = 0
     main_token = BOT_TOKENS[0]
@@ -321,7 +349,6 @@ def start_polling():
             for upd in updates:
                 offset = upd["update_id"] + 1
                 
-                # Handle callback queries (buttons)
                 if "callback_query" in upd:
                     cb = upd["callback_query"]
                     cb_data = cb.get("data")
@@ -332,24 +359,20 @@ def start_polling():
                     api_request(main_token, "answerCallbackQuery", {"callback_query_id": cb["id"]})
                     continue
                 
-                # Handle messages
                 if "message" in upd:
                     msg = upd["message"]
                     chat_id = msg["chat"]["id"]
                     msg_id = msg["message_id"]
                     
-                    # Commands
                     if "text" in msg and msg["text"].startswith('/'):
                         user_id = msg["from"]["id"] if "from" in msg else 0
                         username = msg["from"].get("username", "") if "from" in msg else ""
                         handle_command(msg["text"], chat_id, user_id, username)
                         continue
                     
-                    # Add user to DB
                     if "from" in msg:
                         db.add_user(msg["from"]["id"])
                     
-                    # Determine message type for reaction emojis
                     msg_type = "text"
                     if "photo" in msg:
                         msg_type = "photo"
@@ -360,7 +383,6 @@ def start_polling():
                     elif "document" in msg:
                         msg_type = "document"
                     
-                    # Send reactions in background
                     threading.Thread(
                         target=send_multiple_reactions,
                         args=(chat_id, msg_id, msg_type),
@@ -382,7 +404,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 ✅ Status: ACTIVE
 👥 Users: {db.get_user_count():,}
 🎭 Reactions: {db.reaction_count:,}
-🤖 Tokens: {len(BOT_TOKENS)}
+🤖 Tokens: {len(BOT_TOKENS)} (all used)
 🔒 Locked: {db.is_locked()}
 📢 Force Sub: {FORCE_SUB_CHANNEL or 'Disabled'}
 
@@ -401,20 +423,16 @@ def run_health_server():
     except Exception as e:
         print(f"⚠️ Health error: {e}")
 
-# ==================== MAIN ====================
 def main():
     print("\n" + "=" * 60)
     print("🚀 ANIMATED REACTION BOT STARTING...")
     print("=" * 60)
     
-    # Delete any existing webhooks
     for t in BOT_TOKENS[:3]:
         api_request(t, "deleteWebhook", {"drop_pending_updates": True})
     
-    # Start health server
     threading.Thread(target=run_health_server, daemon=True).start()
     
-    # Show info
     bot_info = api_request(BOT_TOKENS[0], "getMe")
     if bot_info.get("ok"):
         print(f"🤖 Main Bot: @{bot_info['result']['username']}")
@@ -423,7 +441,6 @@ def main():
     print("\n💡 Send /start in Telegram")
     print("=" * 60)
     
-    # Start polling
     start_polling()
 
 if __name__ == '__main__':

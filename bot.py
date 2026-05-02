@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
 ANIMATED REACTION BOT — FINAL VERSION
-Features:
-  ✅ Commands pe reaction nahi (sirf normal messages pe)
-  ✅ Force sub nahi kiya → /start pe 💩 reaction
-  ✅ Force sub kiya → random reaction
-  ✅ Group me limited reactions → sirf allowed emojis use karta hai
-  ✅ Group me all reactions allowed → puri list use karta hai
-  ✅ Channel support (channel_post)
+Fixes:
+  ✅ Channels me reaction (getChat bypass for channels)
+  ✅ Complete Telegram emoji list (60+ emojis)
+  ✅ Commands pe reaction nahi
+  ✅ Force sub nahi → 💩 reaction on /start
+  ✅ Group limited reactions → auto detect & respect
   ✅ Timeout fix, Queue workers, Rate limit retry
-  ✅ Unknown command sirf private me reply karta hai
+  ✅ Unknown command sirf private me reply
 """
 
 import os
@@ -48,9 +47,7 @@ POLL_READ_TIMEOUT = LONG_POLL_TIMEOUT + 10
 
 OWN_USERNAMES = set()
 
-print(f"Tokens: {len(BOT_TOKENS)}")
-print(f"Owner: {OWNER_ID}")
-print(f"Force Sub: {FORCE_SUB_CHANNEL or 'Disabled'}")
+print(f"Tokens: {len(BOT_TOKENS)} | Owner: {OWNER_ID} | ForceSub: {FORCE_SUB_CHANNEL or 'Off'}")
 
 # ==================== DATABASE ====================
 class SimpleDB:
@@ -67,14 +64,14 @@ class SimpleDB:
 
 db = SimpleDB()
 
-# Cache: chat_id -> list of allowed emoji strings
-_reaction_cache = {}
+# chat_id -> list of allowed emojis (None = not fetched yet)
+_reaction_cache      = {}
 _reaction_cache_lock = threading.Lock()
 
-# ==================== API HELPERS ====================
-def api_request(bot_token, method, data=None, read_timeout=API_TIMEOUT):
+# ==================== API ====================
+def api_request(token, method, data=None, read_timeout=API_TIMEOUT):
     try:
-        url  = f"https://api.telegram.org/bot{bot_token}/{method}"
+        url  = f"https://api.telegram.org/bot{token}/{method}"
         resp = requests.post(url, json=data, timeout=(10, read_timeout))
         return resp.json()
     except Exception as e:
@@ -84,66 +81,88 @@ def api_request(bot_token, method, data=None, read_timeout=API_TIMEOUT):
 
 def send_message(chat_id, text, reply_markup=None, photo_url=None, animation_url=None):
     if photo_url:
-        data, method = {"chat_id": chat_id, "photo": photo_url,
-                        "caption": text, "parse_mode": "HTML"}, "sendPhoto"
+        data, m = {"chat_id": chat_id, "photo": photo_url,
+                   "caption": text, "parse_mode": "HTML"}, "sendPhoto"
     elif animation_url:
-        data, method = {"chat_id": chat_id, "animation": animation_url,
-                        "caption": text, "parse_mode": "HTML"}, "sendAnimation"
+        data, m = {"chat_id": chat_id, "animation": animation_url,
+                   "caption": text, "parse_mode": "HTML"}, "sendAnimation"
     else:
-        data, method = {"chat_id": chat_id, "text": text,
-                        "parse_mode": "HTML"}, "sendMessage"
+        data, m = {"chat_id": chat_id, "text": text,
+                   "parse_mode": "HTML"}, "sendMessage"
     if reply_markup:
         data["reply_markup"] = reply_markup
-    return api_request(BOT_TOKENS[0], method, data)
+    return api_request(BOT_TOKENS[0], m, data)
 
 
 def fetch_own_usernames():
-    for token in BOT_TOKENS:
-        info = api_request(token, "getMe")
-        if info.get("ok"):
-            OWN_USERNAMES.add(info['result']['username'].lower())
-    print(f"Own usernames: {OWN_USERNAMES}")
+    for t in BOT_TOKENS:
+        r = api_request(t, "getMe")
+        if r.get("ok"):
+            OWN_USERNAMES.add(r["result"]["username"].lower())
+    print(f"Own bots: {OWN_USERNAMES}")
 
 
 def get_all_bot_usernames():
-    usernames = []
-    for token in BOT_TOKENS:
-        info = api_request(token, "getMe")
-        if info.get("ok"):
-            uname = info['result']['username']
-            OWN_USERNAMES.add(uname.lower())
-            usernames.append(f"@{uname}")
+    out = []
+    for t in BOT_TOKENS:
+        r = api_request(t, "getMe")
+        if r.get("ok"):
+            u = r["result"]["username"]
+            OWN_USERNAMES.add(u.lower())
+            out.append(f"@{u}")
         else:
-            usernames.append("Unknown")
-    return usernames
+            out.append("Unknown")
+    return out
 
 
-# ==================== VALID TELEGRAM REACTION EMOJIS ====================
-# NOTE: Use plain heart (U+2764) NOT the emoji variant (U+2764 U+FE0F)
-# Telegram Bot API setMessageReaction only accepts specific emojis.
+# ==================== COMPLETE TELEGRAM REACTION EMOJI LIST ====================
+# Source: Official Telegram Bot API — setMessageReaction
+# ❤  = U+2764 plain heart (NO FE0F variation selector)
+# These are ALL emojis Telegram currently supports as reactions.
 ALL_VALID_REACTIONS = [
+    # Your requested list
     "👍", "👎", "❤", "🔥", "😂", "😢", "😮", "👏",
     "😁", "🤩", "🤔", "🤯", "😡", "🥳", "😎", "🙏",
     "💯", "🤝", "🥺", "🤡", "🤮", "💔", "💩", "⚡", "🎉",
-    "🥰", "😍", "👌", "🏆", "🤣", "😱", "🌚", "🕊",
+    # Additional fully supported Telegram reactions
+    "🥰", "😍", "🤣", "😱", "👌", "🏆", "🌚", "🕊",
     "👻", "😴", "😇", "🤗", "🤪", "🥱", "😈", "👀",
+    "🎃", "🙈", "😨", "🫡", "💅", "🗿", "💘", "🙉",
+    "😏", "😒", "💪", "🦄", "💀", "☕", "🌭", "🍓",
+    "🍾", "💋", "🖕", "🤓", "👨‍💻", "✍", "🎅", "🎄",
+    "☃", "🌹", "🫀", "🐳", "🍌", "😐", "🤨",
 ]
 
+# Deduplicate while preserving order
+_seen = set()
+ALL_VALID_REACTIONS = [
+    e for e in ALL_VALID_REACTIONS
+    if not (e in _seen or _seen.add(e))
+]
+print(f"Total valid reactions: {len(ALL_VALID_REACTIONS)}")
 
-def get_allowed_reactions(chat_id):
+
+# ==================== ALLOWED REACTIONS PER CHAT ====================
+def get_allowed_reactions(chat_id: int, chat_type: str = "group") -> list:
     """
-    Returns allowed emoji list for this chat.
-    - All reactions allowed  → full ALL_VALID_REACTIONS list
-    - Limited reactions      → only those the group admin enabled
-    - Caches result, refreshes every 30 min
+    For CHANNELS: skip getChat, return full list.
+    Channel reactions are controlled by Telegram itself — bot just tries,
+    and the retry logic drops any unsupported emoji gracefully.
+
+    For GROUPS: call getChat to find admin-allowed reactions.
+    Cache result for 30 minutes.
     """
+    # Channels → always return full list, no getChat needed
+    if chat_type == "channel":
+        return ALL_VALID_REACTIONS
+
     with _reaction_cache_lock:
         cached = _reaction_cache.get(chat_id)
         if cached is not None:
             return cached
 
     result  = api_request(BOT_TOKENS[0], "getChat", {"chat_id": chat_id})
-    allowed = ALL_VALID_REACTIONS  # safe default
+    allowed = ALL_VALID_REACTIONS  # safe fallback
 
     if result.get("ok"):
         avail = result["result"].get("available_reactions")
@@ -155,21 +174,21 @@ def get_allowed_reactions(chat_id):
             if avail.get("type") == "all":
                 allowed = ALL_VALID_REACTIONS
             elif avail.get("type") == "some":
-                chat_emojis = {r["emoji"] for r in avail.get("reactions", [])
-                               if r.get("type") == "emoji"}
-                filtered = [e for e in ALL_VALID_REACTIONS if e in chat_emojis]
+                chat_set = {r["emoji"] for r in avail.get("reactions", [])
+                            if r.get("type") == "emoji"}
+                filtered = [e for e in ALL_VALID_REACTIONS if e in chat_set]
                 allowed  = filtered if filtered else ALL_VALID_REACTIONS
+                print(f"Group {chat_id}: limited to {len(allowed)} reactions")
 
         elif isinstance(avail, list):
-            chat_emojis = {r["emoji"] for r in avail
-                           if isinstance(r, dict) and r.get("type") == "emoji"}
-            filtered = [e for e in ALL_VALID_REACTIONS if e in chat_emojis]
+            chat_set = {r["emoji"] for r in avail
+                        if isinstance(r, dict) and r.get("type") == "emoji"}
+            filtered = [e for e in ALL_VALID_REACTIONS if e in chat_set]
             allowed  = filtered if filtered else ALL_VALID_REACTIONS
 
     with _reaction_cache_lock:
         _reaction_cache[chat_id] = allowed
 
-    print(f"Chat {chat_id}: {len(allowed)} reactions allowed")
     return allowed
 
 
@@ -178,7 +197,7 @@ def _cache_refresh_loop():
         time.sleep(30 * 60)
         with _reaction_cache_lock:
             _reaction_cache.clear()
-        print("Reaction cache refreshed")
+        print("Reaction cache cleared")
 
 threading.Thread(target=_cache_refresh_loop, daemon=True).start()
 
@@ -186,34 +205,41 @@ threading.Thread(target=_cache_refresh_loop, daemon=True).start()
 # ==================== REACTION SENDING ====================
 def send_single_reaction(token, chat_id, msg_id, emoji, is_big, max_retries=3):
     for attempt in range(max_retries):
-        data = {
+        result = api_request(token, "setMessageReaction", {
             "chat_id":    chat_id,
             "message_id": msg_id,
             "reaction":   [{"type": "emoji", "emoji": emoji}],
             "is_big":     is_big,
-        }
-        result = api_request(token, "setMessageReaction", data)
+        })
 
         if result.get("ok"):
             return True
 
-        err_code = result.get("error_code", "?")
-        err_desc = result.get("description", "unknown")
-        print(f"Reaction fail [{emoji}] msg={msg_id} | {err_code}: {err_desc}")
+        err  = result.get("error_code", "?")
+        desc = result.get("description", "unknown")
+        print(f"Reaction fail [{emoji}] msg={msg_id} | {err}: {desc}")
 
-        if err_code == 429:
+        if err == 429:
             wait = result.get("parameters", {}).get("retry_after", 5)
             print(f"Flood wait {wait}s")
             time.sleep(wait + 1)
             continue
 
-        # Big not supported -> try small
+        # Big not supported → try small once
         if is_big and attempt == 0:
-            data["is_big"] = False
-            r2 = api_request(token, "setMessageReaction", data)
+            r2 = api_request(token, "setMessageReaction", {
+                "chat_id":    chat_id,
+                "message_id": msg_id,
+                "reaction":   [{"type": "emoji", "emoji": emoji}],
+                "is_big":     False,
+            })
             if r2.get("ok"):
                 return True
             print(f"Small also failed: {r2.get('description')}")
+            break
+
+        # Bad emoji or not allowed → don't retry, skip it
+        if err in (400, 403):
             break
 
         if attempt < max_retries - 1:
@@ -222,7 +248,7 @@ def send_single_reaction(token, chat_id, msg_id, emoji, is_big, max_retries=3):
     return False
 
 
-def send_multiple_reactions(chat_id, msg_id, forced_emoji=None):
+def send_multiple_reactions(chat_id, msg_id, chat_type="group", forced_emoji=None):
     if db.is_locked():
         return
 
@@ -231,20 +257,18 @@ def send_multiple_reactions(chat_id, msg_id, forced_emoji=None):
         return
 
     if forced_emoji:
-        # e.g. force sub not done -> all bots send 💩
         selected = [forced_emoji] * num
-        print(f"Forced [{forced_emoji}] x{num} -> msg={msg_id}")
+        print(f"Forced [{forced_emoji}] x{num} msg={msg_id}")
     else:
-        allowed  = get_allowed_reactions(chat_id)
-        selected = random.sample(allowed, min(num, len(allowed)))
+        pool     = get_allowed_reactions(chat_id, chat_type)
+        selected = random.sample(pool, min(num, len(pool)))
         while len(selected) < num:
-            selected.append(random.choice(allowed))
-        print(f"Random {num} reactions -> msg={msg_id} chat={chat_id}")
+            selected.append(random.choice(pool))
+        print(f"Reacting: {num} emojis → msg={msg_id} chat={chat_id} type={chat_type}")
 
     success = 0
     for i, (token, emoji) in enumerate(zip(BOT_TOKENS[:num], selected)):
-        is_big = (i < BIG_REACTIONS_COUNT)
-        ok = send_single_reaction(token, chat_id, msg_id, emoji, is_big)
+        ok = send_single_reaction(token, chat_id, msg_id, emoji, i < BIG_REACTIONS_COUNT)
         if ok:
             success += 1
             db.increment_reactions()
@@ -261,11 +285,11 @@ REACTION_WORKERS = 4
 def reaction_worker():
     while True:
         try:
-            chat_id, msg_id, forced_emoji = reaction_queue.get(timeout=2)
+            chat_id, msg_id, chat_type, forced_emoji = reaction_queue.get(timeout=2)
         except queue.Empty:
             continue
         try:
-            send_multiple_reactions(chat_id, msg_id, forced_emoji)
+            send_multiple_reactions(chat_id, msg_id, chat_type, forced_emoji)
         except Exception as e:
             print(f"Worker error: {e}")
         finally:
@@ -274,24 +298,23 @@ def reaction_worker():
 
 def start_reaction_workers():
     for i in range(REACTION_WORKERS):
-        threading.Thread(target=reaction_worker, daemon=True,
-                         name=f"Worker-{i}").start()
+        threading.Thread(target=reaction_worker, daemon=True, name=f"W{i}").start()
     print(f"{REACTION_WORKERS} workers started")
 
 
-def queue_reaction(chat_id, msg_id, forced_emoji=None):
-    reaction_queue.put((chat_id, msg_id, forced_emoji))
-    print(f"Queued msg={msg_id} forced={forced_emoji or 'random'} pending={reaction_queue.qsize()}")
+def queue_reaction(chat_id, msg_id, chat_type="group", forced_emoji=None):
+    reaction_queue.put((chat_id, msg_id, chat_type, forced_emoji))
+    print(f"Queued msg={msg_id} type={chat_type} forced={forced_emoji or 'random'} q={reaction_queue.qsize()}")
 
 
 # ==================== COMMAND FILTER ====================
-def should_handle_command(command_text, chat_type):
+def should_handle_command(cmd_text, chat_type):
     if chat_type == "private":
         return True
-    parts = command_text.split()[0]
+    parts = cmd_text.split()[0]
     if '@' in parts:
-        target = parts.split('@', 1)[1].lower()
-        return target in OWN_USERNAMES
+        return parts.split('@', 1)[1].lower() in OWN_USERNAMES
+    # Bare command in group — only silent owner commands
     return parts.lower() in ('/lock', '/unlock', '/stats', '/bots', '/broadcast')
 
 
@@ -319,17 +342,16 @@ def check_subscription(user_id):
     if not FORCE_SUB_CHANNEL:
         return True
     try:
-        resp = api_request(BOT_TOKENS[0], "getChatMember",
-                           {"chat_id": FORCE_SUB_CHANNEL, "user_id": user_id})
-        return (resp.get("ok") and
-                resp["result"]["status"] in ["member", "administrator", "creator"])
+        r = api_request(BOT_TOKENS[0], "getChatMember",
+                        {"chat_id": FORCE_SUB_CHANNEL, "user_id": user_id})
+        return r.get("ok") and r["result"]["status"] in ["member","administrator","creator"]
     except:
         return False
 
 
-# ==================== COMMAND HANDLERS ====================
-def handle_command(command, chat_id, msg_id, user_id, username="", chat_type="private"):
-    cmd      = command.split()[0].split('@')[0].lower()
+# ==================== COMMANDS ====================
+def handle_command(cmd_text, chat_id, msg_id, user_id, username="", chat_type="private"):
+    cmd      = cmd_text.split()[0].split('@')[0].lower()
     is_owner = (user_id == OWNER_ID)
 
     if cmd == '/start':
@@ -337,8 +359,8 @@ def handle_command(command, chat_id, msg_id, user_id, username="", chat_type="pr
 
         if FORCE_SUB_CHANNEL and not is_owner:
             if not check_subscription(user_id):
-                # React with 💩 on their /start message
-                queue_reaction(chat_id, msg_id, forced_emoji="💩")
+                # 💩 on their /start message
+                queue_reaction(chat_id, msg_id, chat_type, forced_emoji="💩")
                 send_message(chat_id,
                     "🔒 <b>Channel Membership Required</b>\n\n"
                     f"Please join:\n{FORCE_SUB_CHANNEL}\n\n"
@@ -346,13 +368,13 @@ def handle_command(command, chat_id, msg_id, user_id, username="", chat_type="pr
                     get_force_sub_keyboard())
                 return
 
-        # Subscribed or no force sub -> random reaction on /start
-        queue_reaction(chat_id, msg_id)
+        # Subscribed / no force sub → random reaction
+        queue_reaction(chat_id, msg_id, chat_type)
 
         welcome = (
             f"🌸 <b>Welcome {username or 'User'}!</b>\n\n"
             "✨ I add <b>multiple animated reactions</b> using all bot tokens.\n\n"
-            "<b>Stats:</b>\n"
+            f"<b>Stats:</b>\n"
             f"• Active Bots: {len(BOT_TOKENS)}\n"
             f"• Reactions sent: {db.reaction_count:,}\n"
             f"• Users: {db.get_user_count():,}\n\n"
@@ -371,26 +393,26 @@ def handle_command(command, chat_id, msg_id, user_id, username="", chat_type="pr
             "❓ <b>Help Center</b>\n\n"
             "<b>How it works:</b>\n"
             "• Each bot token = one reaction\n"
-            f"• First {BIG_REACTIONS_COUNT} reactions are <b>BIG & ANIMATED</b>\n"
-            "• Works in channels, groups, private chats\n"
-            "• Auto detects group's allowed reactions\n"
+            f"• First {BIG_REACTIONS_COUNT} are <b>BIG & ANIMATED</b>\n"
+            "• Channels: full emoji list used\n"
+            "• Groups: auto detects allowed reactions\n"
             "• Queue → no message ever missed\n"
             "• Auto retry on rate limits\n\n"
-            "<b>Setup for channels/groups:</b>\n"
+            "<b>Setup:</b>\n"
             "1. /bots → get all bot usernames\n"
-            "2. Add each as admin\n"
+            "2. Add each as admin (channel/group)\n"
             "3. Enable <b>Add Reactions</b> permission\n"
-            "4. Post any message → reactions aayenge!\n\n"
+            "4. Done! Reactions aayenge automatically\n\n"
             "<b>Commands:</b>\n"
             "/start /help /bots /stats /lock /unlock /premium\n\n"
             "<b>Owner:</b> @technicalSerena"
         )
 
     elif cmd == '/bots':
-        usernames = get_all_bot_usernames()
-        text = "🤖 <b>All Bot Usernames</b>\n\nAdd as admins + enable <b>Add Reactions</b>:\n\n"
-        for idx, uname in enumerate(usernames, 1):
-            text += f"{idx}. {uname}\n"
+        names = get_all_bot_usernames()
+        text  = "🤖 <b>All Bot Usernames</b>\n\nAdd as admins + enable <b>Add Reactions</b>:\n\n"
+        for i, n in enumerate(names, 1):
+            text += f"{i}. {n}\n"
         text += "\n💡 Every message gets multiple animated reactions!"
         send_message(chat_id, text)
 
@@ -415,23 +437,23 @@ def handle_command(command, chat_id, msg_id, user_id, username="", chat_type="pr
         send_message(chat_id, "🔓 Reactions enabled.")
 
     elif cmd == '/broadcast' and is_owner:
-        send_message(chat_id, "📢 /broadcast — reply to a message to broadcast.")
+        send_message(chat_id, "📢 Reply to a message with /broadcast to broadcast.")
 
     elif cmd == '/premium':
         send_message(chat_id,
             "💎 <b>Premium Plan</b>\n\nContact @technicalSerena to upgrade.")
 
     else:
-        # Only reply in PRIVATE — never spam in groups
+        # ONLY reply in private — never spam groups
         if chat_type == "private":
             send_message(chat_id, "❓ Unknown command. Send /start for help.")
 
 
-# ==================== CALLBACK HANDLER ====================
-def handle_callback(callback_data, chat_id, msg_id, user_id):
-    if callback_data == "help":
+# ==================== CALLBACK ====================
+def handle_callback(data, chat_id, msg_id, user_id):
+    if data == "help":
         handle_command('/help', chat_id, msg_id, user_id, chat_type="private")
-    elif callback_data == "check_sub":
+    elif data == "check_sub":
         if FORCE_SUB_CHANNEL:
             if check_subscription(user_id):
                 send_message(chat_id, "✅ Verified! Send /start again.")
@@ -450,7 +472,7 @@ def start_polling():
             resp = api_request(
                 main_token, "getUpdates",
                 {"offset": offset, "timeout": LONG_POLL_TIMEOUT},
-                read_timeout=POLL_READ_TIMEOUT
+                read_timeout=POLL_READ_TIMEOUT     # ✅ timeout fix
             )
 
             if not resp.get("ok"):
@@ -461,7 +483,7 @@ def start_polling():
             for upd in resp.get("result", []):
                 offset = upd["update_id"] + 1
 
-                # Callback
+                # ── Callback ──────────────────────────────────────────
                 if "callback_query" in upd:
                     cb = upd["callback_query"]
                     handle_callback(cb.get("data"),
@@ -472,7 +494,7 @@ def start_polling():
                                 {"callback_query_id": cb["id"]})
                     continue
 
-                # Group / Private message
+                # ── Private / Group ────────────────────────────────────
                 if "message" in upd:
                     msg       = upd["message"]
                     chat_id   = msg["chat"]["id"]
@@ -483,27 +505,27 @@ def start_polling():
                         db.add_user(msg["from"]["id"])
 
                     if "text" in msg and msg["text"].startswith('/'):
-                        cmd_text = msg["text"]
-                        if not should_handle_command(cmd_text, chat_type):
-                            # Other bot's command — skip entirely, no reaction
-                            continue
-                        handle_command(cmd_text, chat_id, msg_id,
+                        if not should_handle_command(msg["text"], chat_type):
+                            continue   # other bot's command — skip, no reaction
+                        handle_command(msg["text"], chat_id, msg_id,
                                        msg.get("from", {}).get("id", 0),
                                        msg.get("from", {}).get("username", ""),
                                        chat_type=chat_type)
                         continue
 
-                    # Normal message -> random reaction
-                    queue_reaction(chat_id, msg_id)
+                    # Normal message
+                    queue_reaction(chat_id, msg_id, chat_type)
 
-                # Channel post
+                # ── Channel post ───────────────────────────────────────
                 elif "channel_post" in upd:
-                    post    = upd["channel_post"]
-                    chat_id = post["chat"]["id"]
-                    msg_id  = post["message_id"]
+                    post      = upd["channel_post"]
+                    chat_id   = post["chat"]["id"]
+                    msg_id    = post["message_id"]
+                    # Skip commands in channels
                     if "text" in post and post["text"].startswith('/'):
                         continue
-                    queue_reaction(chat_id, msg_id)
+                    # ✅ Pass chat_type="channel" so getChat is skipped
+                    queue_reaction(chat_id, msg_id, "channel")
 
         except Exception as e:
             print(f"Polling error: {e}")
@@ -518,25 +540,24 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write((
             f"ANIMATED REACTION BOT - ACTIVE\n\n"
-            f"Users:     {db.get_user_count():,}\n"
-            f"Reactions: {db.reaction_count:,}\n"
-            f"Tokens:    {len(BOT_TOKENS)}\n"
-            f"Queue:     {reaction_queue.qsize()} pending\n"
-            f"Chats:     {len(_reaction_cache)} cached\n"
-            f"Locked:    {db.is_locked()}\n"
-            f"ForceSub:  {FORCE_SUB_CHANNEL or 'Disabled'}\n\n"
+            f"Users:      {db.get_user_count():,}\n"
+            f"Reactions:  {db.reaction_count:,}\n"
+            f"Tokens:     {len(BOT_TOKENS)}\n"
+            f"Emojis:     {len(ALL_VALID_REACTIONS)}\n"
+            f"Queue:      {reaction_queue.qsize()} pending\n"
+            f"Chats:      {len(_reaction_cache)} cached\n"
+            f"Locked:     {db.is_locked()}\n"
+            f"ForceSub:   {FORCE_SUB_CHANNEL or 'Disabled'}\n\n"
             f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         ).encode())
 
-    def log_message(self, format, *args):
+    def log_message(self, *a):
         pass
 
 
 def run_health_server():
     try:
-        server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
-        print(f"Health server on port {PORT}")
-        server.serve_forever()
+        HTTPServer(('0.0.0.0', PORT), HealthHandler).serve_forever()
     except Exception as e:
         print(f"Health error: {e}")
 
@@ -554,11 +575,10 @@ def main():
     start_reaction_workers()
     threading.Thread(target=run_health_server, daemon=True).start()
 
-    bot_info = api_request(BOT_TOKENS[0], "getMe")
-    if bot_info.get("ok"):
-        print(f"Main Bot: @{bot_info['result']['username']}")
-    print(f"Total Tokens: {len(BOT_TOKENS)}")
-    print(f"Valid Emojis: {len(ALL_VALID_REACTIONS)}")
+    info = api_request(BOT_TOKENS[0], "getMe")
+    if info.get("ok"):
+        print(f"Main Bot: @{info['result']['username']}")
+    print(f"Tokens: {len(BOT_TOKENS)} | Emojis: {len(ALL_VALID_REACTIONS)}")
     print("=" * 60)
 
     start_polling()
